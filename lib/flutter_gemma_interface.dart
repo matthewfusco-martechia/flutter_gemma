@@ -98,6 +98,14 @@ abstract class FlutterGemmaPlugin extends PlatformInterface {
 
   /// Clear all documents from vector store.
   Future<void> clearVectorStore();
+
+  /// Reset model context and clear KV cache.
+  /// 
+  /// This method completely unloads the model from memory, clearing all conversation
+  /// history and KV cache. You must call createModel() again after this to use the model.
+  /// 
+  /// Use this to fix context bleed between chat sessions.
+  Future<void> resetModelContext();
 }
 
 /// Represents an LLM model instance.

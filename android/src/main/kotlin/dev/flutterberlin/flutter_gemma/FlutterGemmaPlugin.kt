@@ -222,6 +222,28 @@ private class PlatformServiceImpl(
     }
   }
 
+  override fun resetModelContext(callback: (Result<Unit>) -> Unit) {
+    scope.launch {
+      try {
+        println("[PLUGIN] Resetting model context to clear KV cache")
+        
+        // Close the current session (releases KV cache)
+        session?.close()
+        session = null
+        
+        // Close and null the model to force complete unload from memory
+        inferenceModel?.close()
+        inferenceModel = null
+        
+        println("[PLUGIN] Model context reset successfully")
+        callback(Result.success(Unit))
+      } catch (e: Exception) {
+        println("[PLUGIN] Error resetting model context: ${e.message}")
+        callback(Result.failure(e))
+      }
+    }
+  }
+
   override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
     eventSink = events
     val model = inferenceModel ?: return

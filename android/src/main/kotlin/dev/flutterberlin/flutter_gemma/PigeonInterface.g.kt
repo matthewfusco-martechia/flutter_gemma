@@ -162,6 +162,7 @@ interface PlatformService {
   fun generateResponse(callback: (Result<String>) -> Unit)
   fun generateResponseAsync(callback: (Result<Unit>) -> Unit)
   fun stopGeneration(callback: (Result<Unit>) -> Unit)
+  fun resetModelContext(callback: (Result<Unit>) -> Unit)
   fun createEmbeddingModel(modelPath: String, tokenizerPath: String, preferredBackend: PreferredBackend?, callback: (Result<Unit>) -> Unit)
   fun closeEmbeddingModel(callback: (Result<Unit>) -> Unit)
   fun generateEmbeddingFromModel(text: String, callback: (Result<List<Double>>) -> Unit)
@@ -362,6 +363,23 @@ interface PlatformService {
         if (api != null) {
           channel.setMessageHandler { _, reply ->
             api.stopGeneration{ result: Result<Unit> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(wrapError(error))
+              } else {
+                reply.reply(wrapResult(null))
+              }
+            }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.flutter_gemma.PlatformService.resetModelContext$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { _, reply ->
+            api.resetModelContext{ result: Result<Unit> ->
               val error = result.exceptionOrNull()
               if (error != null) {
                 reply.reply(wrapError(error))

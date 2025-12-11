@@ -280,6 +280,19 @@ class PlatformServiceImpl : NSObject, PlatformService, FlutterStreamHandler {
         )))
     }
 
+    func resetModelContext(completion: @escaping (Result<Void, any Error>) -> Void) {
+        print("[PLUGIN] Resetting model context to clear KV cache")
+        
+        // Close the current session (releases KV cache)
+        session = nil
+        
+        // Close and null the model to force complete unload from memory
+        model = nil
+        
+        print("[PLUGIN] Model context reset successfully")
+        completion(.success(()))
+    }
+
     // MARK: - RAG Methods (iOS Implementation)
     
     func createEmbeddingModel(modelPath: String, tokenizerPath: String, preferredBackend: PreferredBackend?, completion: @escaping (Result<Void, Error>) -> Void) {

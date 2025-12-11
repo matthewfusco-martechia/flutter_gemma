@@ -193,6 +193,7 @@ protocol PlatformService {
   func generateResponse(completion: @escaping (Result<String, Error>) -> Void)
   func generateResponseAsync(completion: @escaping (Result<Void, Error>) -> Void)
   func stopGeneration(completion: @escaping (Result<Void, Error>) -> Void)
+  func resetModelContext(completion: @escaping (Result<Void, Error>) -> Void)
   func createEmbeddingModel(modelPath: String, tokenizerPath: String, preferredBackend: PreferredBackend?, completion: @escaping (Result<Void, Error>) -> Void)
   func closeEmbeddingModel(completion: @escaping (Result<Void, Error>) -> Void)
   func generateEmbeddingFromModel(text: String, completion: @escaping (Result<[Double], Error>) -> Void)
@@ -380,6 +381,21 @@ class PlatformServiceSetup {
       }
     } else {
       stopGenerationChannel.setMessageHandler(nil)
+    }
+    let resetModelContextChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.flutter_gemma.PlatformService.resetModelContext\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      resetModelContextChannel.setMessageHandler { _, reply in
+        api.resetModelContext { result in
+          switch result {
+          case .success:
+            reply(wrapResult(nil))
+          case .failure(let error):
+            reply(wrapError(error))
+          }
+        }
+      }
+    } else {
+      resetModelContextChannel.setMessageHandler(nil)
     }
     let createEmbeddingModelChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.flutter_gemma.PlatformService.createEmbeddingModel\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {

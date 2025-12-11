@@ -1051,6 +1051,37 @@ await session.close(); // Always close the session when done
 
 For chat-based applications, you can create a chat instance. Unlike sessions, the chat instance manages the conversation context and refreshes sessions when necessary.
 
+### 🔄 Resetting Model Context (Fixing Context Bleed)
+
+**Problem**: MediaPipe's LLM Inference API maintains a KV cache (Key-Value cache) in native memory that stores conversation history. This cache persists even when creating new chat sessions, causing responses from previous conversations to "bleed" into new ones.
+
+**Solution**: Use `FlutterGemma.resetModelContext()` to completely clear the model's memory before starting a new conversation:
+
+```dart
+// User wants to start a completely fresh conversation
+await FlutterGemma.resetModelContext();
+
+// Recreate the model - it will have no memory of previous chats
+final model = await FlutterGemma.getActiveModel(maxTokens: 1024);
+final chat = await model.createChat();
+
+// Now you can start a new conversation without context bleed
+await chat.addQueryChunk(Message.text(text: 'Hello!', isUser: true));
+final response = await chat.generateChatResponse();
+```
+
+**Important Notes:**
+- After calling `resetModelContext()`, all previous chat sessions become invalid
+- You must call `getActiveModel()` again to create a new model instance
+- This completely unloads the model from memory and clears the KV cache
+- Use this when you need to guarantee a fresh conversation state
+
+**When to use:**
+- Starting a new chat session for a different user
+- Implementing a "Clear Chat" or "New Conversation" button
+- After completing a conversation to ensure no context leaks
+- When switching between different conversation contexts
+
 **Text-Only Chat:**
 ```dart
 final chat = await inferenceModel.createChat(

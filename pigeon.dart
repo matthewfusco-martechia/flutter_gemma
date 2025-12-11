@@ -67,6 +67,10 @@ abstract class PlatformService {
   @async
   void stopGeneration();
 
+  // Reset model context/KV cache to prevent context bleed between sessions
+  @async
+  void resetModelContext();
+
   // === RAG Methods ===
 
   // RAG Embedding Methods

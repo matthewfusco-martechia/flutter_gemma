@@ -1,3 +1,10 @@
+## 0.11.13 (Unreleased)
+ - 🔄 **Reset Model Context**: Added `FlutterGemma.resetModelContext()` to fix context bleed between chat sessions
+   - Completely clears KV cache and conversation memory
+   - Solves issue where responses from previous conversations leak into new ones
+   - Available on both iOS and Android platforms
+   - See README for usage examples
+
 ## 0.11.12
  - 🌐 **Web VectorStore**: Full RAG support on web with SQLite WASM
    - Uses wa-sqlite with OPFS storage (10x faster than IndexedDB)

@@ -348,6 +348,40 @@ class FlutterGemma {
     }
   }
 
+  /// Reset model context and clear KV cache
+  ///
+  /// This method completely unloads the active model from memory, clearing all conversation
+  /// history and KV cache. You must call `getActiveModel()` again after this to recreate
+  /// the model instance.
+  ///
+  /// **Use Case**: Fix context bleed between chat sessions
+  ///
+  /// **Context Bleed Issue**: MediaPipe's LLM Inference API maintains a KV cache (Key-Value cache)
+  /// in native memory that stores conversation history. This cache is preserved even when
+  /// creating new chat sessions, causing responses from previous conversations to leak into
+  /// new ones.
+  ///
+  /// **Solution**: Call this method to completely reset the model state before starting a new
+  /// conversation.
+  ///
+  /// Example:
+  /// ```dart
+  /// // User wants to start a fresh conversation
+  /// await FlutterGemma.resetModelContext();
+  ///
+  /// // Now recreate the model - it will have no memory of previous chats
+  /// final model = await FlutterGemma.getActiveModel(maxTokens: 1024);
+  /// final chat = await model.createChat();
+  /// ```
+  ///
+  /// **Note**: After calling this method:
+  /// - All chat sessions will be invalidated
+  /// - Any references to the previous model instance will be invalid
+  /// - You must call `getActiveModel()` again to get a fresh model instance
+  static Future<void> resetModelContext() async {
+    await FlutterGemmaPlugin.instance.resetModelContext();
+  }
+
   /// Reset ServiceRegistry (primarily for testing)
   static void reset() {
     ServiceRegistry.reset();

@@ -510,4 +510,23 @@ class FlutterGemmaMobile extends FlutterGemmaPlugin {
   Future<void> clearVectorStore() async {
     await ServiceRegistry.instance.vectorStoreRepository.clear();
   }
+
+  @override
+  Future<void> resetModelContext() async {
+    debugPrint('🔄 [FlutterGemma] Resetting model context...');
+    
+    // Close the initialized model if it exists
+    if (_initializedModel != null) {
+      debugPrint('   Closing inference model...');
+      await _initializedModel?.close();
+      _initializedModel = null;
+      _initCompleter = null;
+      _lastActiveInferenceSpec = null;
+    }
+    
+    // Call the platform method to reset native model context
+    await _platformService.resetModelContext();
+    
+    debugPrint('✅ [FlutterGemma] Model context reset complete');
+  }
 }
