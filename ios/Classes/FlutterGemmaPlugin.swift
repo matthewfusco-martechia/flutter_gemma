@@ -55,6 +55,11 @@ class PlatformServiceImpl : NSObject, PlatformService, FlutterStreamHandler {
 
     // VectorStore property
     private var vectorStore: VectorStore?
+    
+    // Generation tracking for cancellation support
+    private var activeGenerationId: String?
+    private var activeGenerationTask: Task<Void, Never>?
+    private var cancelledGenerationIds = Set<String>()
 
     func createModel(
         maxTokens: Int64,
@@ -223,42 +228,97 @@ class PlatformServiceImpl : NSObject, PlatformService, FlutterStreamHandler {
             return
         }
         
-        print("[PLUGIN LOG] Session and eventSink available, starting generation")
-        DispatchQueue.global(qos: .userInitiated).async {
+        // Generate unique ID for this generation
+        let generationId = UUID().uuidString
+        
+        print("[PLUGIN LOG] Session and eventSink available, starting generation \(generationId)")
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            
             do {
                 print("[PLUGIN LOG] Getting async stream from session")
                 let stream = try session.generateResponseAsync()
                 print("[PLUGIN LOG] Got stream, starting Task")
-                Task.detached { [weak self] in
+                
+                // Store the generation ID and task handle
+                DispatchQueue.main.sync {
+                    self.activeGenerationId = generationId
+                }
+                
+                let task = Task.detached { [weak self] in
                     guard let self = self else { 
                         print("[PLUGIN LOG] Self is nil in Task")
                         return 
                     }
                     do {
-                        print("[PLUGIN LOG] Starting to iterate over stream")
+                        print("[PLUGIN LOG] Starting to iterate over stream \(generationId)")
                         var tokenCount = 0
                         for try await token in stream {
+                            // Check if this generation has been cancelled
+                            let isCancelled = await MainActor.run {
+                                return self.cancelledGenerationIds.contains(generationId) || 
+                                       self.activeGenerationId != generationId
+                            }
+                            
+                            if isCancelled {
+                                print("[PLUGIN LOG] Generation \(generationId) cancelled, stopping token emission at #\(tokenCount)")
+                                break
+                            }
+                            
                             tokenCount += 1
-                            print("[PLUGIN LOG] Got token #\(tokenCount): '\(token)'")
-                            DispatchQueue.main.async {
+                            print("[PLUGIN LOG] Got token #\(tokenCount): '\(token)' for generation \(generationId)")
+                            
+                            await MainActor.run {
                                 print("[PLUGIN LOG] Sending token to Flutter via eventSink")
                                 eventSink(["partialResult": token, "done": false])
                                 print("[PLUGIN LOG] Token sent to Flutter")
                             }
                         }
-                        print("[PLUGIN LOG] Stream finished after \(tokenCount) tokens")
-                        DispatchQueue.main.async {
-                            print("[PLUGIN LOG] Sending FlutterEndOfEventStream")
-                            eventSink(FlutterEndOfEventStream)
-                            print("[PLUGIN LOG] FlutterEndOfEventStream sent")
+                        
+                        // Check one more time before sending completion
+                        let isCancelled = await MainActor.run {
+                            return self.cancelledGenerationIds.contains(generationId)
+                        }
+                        
+                        if !isCancelled {
+                            print("[PLUGIN LOG] Stream finished after \(tokenCount) tokens for generation \(generationId)")
+                            await MainActor.run {
+                                print("[PLUGIN LOG] Sending FlutterEndOfEventStream")
+                                eventSink(FlutterEndOfEventStream)
+                                print("[PLUGIN LOG] FlutterEndOfEventStream sent")
+                            }
+                        } else {
+                            print("[PLUGIN LOG] Stream cancelled, not sending FlutterEndOfEventStream for generation \(generationId)")
+                        }
+                        
+                        // Clean up this generation ID from cancelled set
+                        await MainActor.run {
+                            self.cancelledGenerationIds.remove(generationId)
+                            if self.activeGenerationId == generationId {
+                                self.activeGenerationId = nil
+                                self.activeGenerationTask = nil
+                            }
                         }
                     } catch {
                         print("[PLUGIN LOG] Error in stream iteration: \(error)")
-                        DispatchQueue.main.async {
+                        await MainActor.run {
                             eventSink(FlutterError(code: "ERROR", message: error.localizedDescription, details: nil))
+                            
+                            // Clean up on error
+                            self.cancelledGenerationIds.remove(generationId)
+                            if self.activeGenerationId == generationId {
+                                self.activeGenerationId = nil
+                                self.activeGenerationTask = nil
+                            }
                         }
                     }
                 }
+                
+                // Store the task handle on main thread
+                DispatchQueue.main.sync {
+                    self.activeGenerationTask = task
+                }
+                
                 DispatchQueue.main.async {
                     print("[PLUGIN LOG] Completing with success")
                     completion(.success(()))
@@ -273,11 +333,36 @@ class PlatformServiceImpl : NSObject, PlatformService, FlutterStreamHandler {
     }
 
     func stopGeneration(completion: @escaping (Result<Void, any Error>) -> Void) {
-        completion(.failure(PigeonError(
-            code: "stop_not_supported", 
-            message: "Stop generation is not supported on iOS platform yet", 
-            details: nil
-        )))
+        print("[PLUGIN LOG] stopGeneration called")
+        
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else {
+                completion(.failure(PigeonError(code: "plugin_disposed", message: "Plugin instance is nil", details: nil)))
+                return
+            }
+            
+            // Check if there's an active generation
+            guard let generationId = self.activeGenerationId else {
+                print("[PLUGIN LOG] No active generation to stop")
+                completion(.success(()))
+                return
+            }
+            
+            print("[PLUGIN LOG] Stopping generation \(generationId)")
+            
+            // Mark this generation as cancelled
+            self.cancelledGenerationIds.insert(generationId)
+            
+            // Cancel the active task if it exists
+            self.activeGenerationTask?.cancel()
+            
+            // Clear active generation state
+            self.activeGenerationId = nil
+            self.activeGenerationTask = nil
+            
+            print("[PLUGIN LOG] Generation \(generationId) marked as cancelled, task cancelled")
+            completion(.success(()))
+        }
     }
 
     func resetModelContext(completion: @escaping (Result<Void, any Error>) -> Void) {

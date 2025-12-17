@@ -69,14 +69,10 @@ class GemmaInputFieldState extends State<GemmaInputField> {
         ),
       );
     } catch (e) {
-      final message = e.toString().contains('stop_not_supported')
-          ? 'Stop generation not yet supported on this platform'
-          : 'Failed to stop generation: $e';
-
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(message),
+          content: Text('Failed to stop generation: $e'),
           duration: const Duration(seconds: 3),
           backgroundColor: Colors.orange,
         ),

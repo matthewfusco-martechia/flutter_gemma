@@ -141,17 +141,7 @@ class MobileInferenceModelSession extends InferenceModelSession {
 
   @override
   Future<void> stopGeneration() async {
-    try {
-      await _platformService.stopGeneration();
-    } catch (e) {
-      if (e.toString().contains('stop_not_supported')) {
-        throw PlatformException(
-          code: 'stop_not_supported',
-          message: 'Stop generation is not supported on this platform',
-        );
-      }
-      rethrow;
-    }
+    await _platformService.stopGeneration();
   }
 
   @override
