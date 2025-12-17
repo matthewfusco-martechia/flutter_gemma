@@ -12,6 +12,8 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 // Enum generated via Pigeon
 enum class PreferredBackendEnum(val value: Int) {
@@ -102,6 +104,31 @@ class InferenceModelSession(
     private val errorFlow: MutableSharedFlow<Throwable>
 ) {
     private val session: LlmInferenceSession
+    private val mutex = Mutex()
+    private var _isGenerating = false
+
+    val isGenerating: Boolean
+        get() = _isGenerating
+
+    private fun markStarting() {
+        runBlocking {
+            mutex.lock()
+            _isGenerating = true
+        }
+    }
+
+    private fun markFinished() {
+        if (mutex.isLocked) {
+            _isGenerating = false
+            mutex.unlock()
+        }
+    }
+
+    suspend fun waitUntilIdle() {
+        println("[INFERENCE] Waiting for engine to be idle...")
+        mutex.withLock { }
+        println("[INFERENCE] Engine is now idle.")
+    }
 
     init {
         val sessionOptionsBuilder = LlmInferenceSession.LlmInferenceSessionOptions.builder()
@@ -138,18 +165,25 @@ class InferenceModelSession(
     fun generateResponse(): String = session.generateResponse()
 
     fun generateResponseAsync() {
+        markStarting()
         session.generateResponseAsync { result, done ->
             result?.let {
                 resultFlow.tryEmit(it to done)
+            }
+            if (done) {
+                markFinished()
             }
         }
     }
 
     fun stopGeneration() {
         session.cancelGenerateResponseAsync()
+        // Note: markFinished() will be called when the async task actually completes or is cancelled
+        // MediaPipe callbacks should still fire with done=true or an error
     }
 
     fun close() {
+        markFinished()
         session.close()
     }
 }

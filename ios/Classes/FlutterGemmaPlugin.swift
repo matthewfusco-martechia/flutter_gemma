@@ -159,6 +159,7 @@ class PlatformServiceImpl : NSObject, PlatformService, FlutterStreamHandler {
 
         DispatchQueue.global(qos: .userInitiated).async {
             do {
+                session.waitUntilIdle()
                 try session.addQueryChunk(prompt: prompt)
                 DispatchQueue.main.async { completion(.success(())) }
             } catch {
@@ -236,6 +237,10 @@ class PlatformServiceImpl : NSObject, PlatformService, FlutterStreamHandler {
             guard let self = self else { return }
             
             do {
+                // Ensure engine is ready and mark it busy
+                session.waitUntilIdle()
+                session.markStarting()
+                
                 print("[PLUGIN LOG] Getting async stream from session")
                 let stream = try session.generateResponseAsync()
                 print("[PLUGIN LOG] Got stream, starting Task")
@@ -250,6 +255,14 @@ class PlatformServiceImpl : NSObject, PlatformService, FlutterStreamHandler {
                         print("[PLUGIN LOG] Self is nil in Task")
                         return 
                     }
+                    defer {
+                        // ALWAYS mark finished when task exits
+                        Task { @MainActor in
+                            session.markFinished()
+                            print("[PLUGIN LOG] Generation \(generationId) marked as finished")
+                        }
+                    }
+                    
                     do {
                         print("[PLUGIN LOG] Starting to iterate over stream \(generationId)")
                         var tokenCount = 0
@@ -335,7 +348,7 @@ class PlatformServiceImpl : NSObject, PlatformService, FlutterStreamHandler {
     func stopGeneration(completion: @escaping (Result<Void, any Error>) -> Void) {
         print("[PLUGIN LOG] stopGeneration called")
         
-        DispatchQueue.main.async { [weak self] in
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else {
                 completion(.failure(PigeonError(code: "plugin_disposed", message: "Plugin instance is nil", details: nil)))
                 return
@@ -344,24 +357,33 @@ class PlatformServiceImpl : NSObject, PlatformService, FlutterStreamHandler {
             // Check if there's an active generation
             guard let generationId = self.activeGenerationId else {
                 print("[PLUGIN LOG] No active generation to stop")
-                completion(.success(()))
+                // Still check idle just in case
+                self.session?.waitUntilIdle()
+                DispatchQueue.main.async { completion(.success(())) }
                 return
             }
             
             print("[PLUGIN LOG] Stopping generation \(generationId)")
             
             // Mark this generation as cancelled
-            self.cancelledGenerationIds.insert(generationId)
+            DispatchQueue.main.sync {
+                self.cancelledGenerationIds.insert(generationId)
+                
+                // Cancel the active task if it exists
+                self.activeGenerationTask?.cancel()
+                
+                // Clear active generation state
+                self.activeGenerationId = nil
+                self.activeGenerationTask = nil
+            }
             
-            // Cancel the active task if it exists
-            self.activeGenerationTask?.cancel()
+            // WAIT for engine to be idle (PredictDone)
+            self.session?.waitUntilIdle()
             
-            // Clear active generation state
-            self.activeGenerationId = nil
-            self.activeGenerationTask = nil
-            
-            print("[PLUGIN LOG] Generation \(generationId) marked as cancelled, task cancelled")
-            completion(.success(()))
+            DispatchQueue.main.async {
+                print("[PLUGIN LOG] Generation \(generationId) stopped and engine reached idle state")
+                completion(.success(()))
+            }
         }
     }
 

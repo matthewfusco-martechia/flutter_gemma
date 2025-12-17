@@ -170,6 +170,7 @@ private class PlatformServiceImpl(
   override fun addQueryChunk(prompt: String, callback: (Result<Unit>) -> Unit) {
     scope.launch {
       try {
+        session?.waitUntilIdle()
         session?.addQueryChunk(prompt) ?: throw IllegalStateException("Session not created")
         callback(Result.success(Unit))
       } catch (e: Exception) {
@@ -181,6 +182,7 @@ private class PlatformServiceImpl(
   override fun addImage(imageBytes: ByteArray, callback: (Result<Unit>) -> Unit) {
     scope.launch {
       try {
+        session?.waitUntilIdle()
         session?.addImage(imageBytes) ?: throw IllegalStateException("Session not created")
         callback(Result.success(Unit))
       } catch (e: Exception) {
@@ -192,6 +194,7 @@ private class PlatformServiceImpl(
   override fun generateResponse(callback: (Result<String>) -> Unit) {
     scope.launch {
       try {
+        session?.waitUntilIdle()
         val result = session?.generateResponse() ?: throw IllegalStateException("Session not created")
         callback(Result.success(result))
       } catch (e: Exception) {
@@ -203,6 +206,7 @@ private class PlatformServiceImpl(
   override fun generateResponseAsync(callback: (Result<Unit>) -> Unit) {
     scope.launch {
       try {
+        session?.waitUntilIdle()
         session?.generateResponseAsync() ?: throw IllegalStateException("Session not created")
         callback(Result.success(Unit))
       } catch (e: Exception) {
@@ -215,6 +219,7 @@ private class PlatformServiceImpl(
     scope.launch {
       try {
         session?.stopGeneration() ?: throw IllegalStateException("Session not created")
+        session?.waitUntilIdle()
         callback(Result.success(Unit))
       } catch (e: Exception) {
         callback(Result.failure(e))

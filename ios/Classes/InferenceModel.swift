@@ -36,6 +36,40 @@ struct InferenceModel {
 
 final class InferenceSession {
     private let session: LlmInference.Session
+    private var _isGenerating = false
+    private let lock = NSLock()
+    private let idleSemaphore = DispatchSemaphore(value: 1)
+
+    var isGenerating: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return _isGenerating
+    }
+
+    func markStarting() {
+        lock.lock()
+        defer { lock.unlock() }
+        if !_isGenerating {
+            _isGenerating = true
+            idleSemaphore.wait()
+        }
+    }
+
+    func markFinished() {
+        lock.lock()
+        defer { lock.unlock() }
+        if _isGenerating {
+            _isGenerating = false
+            idleSemaphore.signal()
+        }
+    }
+
+    func waitUntilIdle() {
+        print("[INFERENCE] Waiting for engine to be idle...")
+        idleSemaphore.wait()
+        idleSemaphore.signal()
+        print("[INFERENCE] Engine is now idle.")
+    }
 
     init(inference: LlmInference,
          temperature: Float,
