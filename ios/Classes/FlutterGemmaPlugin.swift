@@ -56,6 +56,9 @@ class PlatformServiceImpl : NSObject, PlatformService, FlutterStreamHandler {
     // VectorStore property
     private var vectorStore: VectorStore?
     
+    // Dedicated serial queue for ALL MediaPipe calls to ensure Thread Affinity
+    private let gemmaQueue = DispatchQueue(label: "dev.flutterberlin.flutter_gemma.engine")
+
     // Generation tracking for cancellation support
     private var activeGenerationId: String?
     private var activeGenerationTask: Task<Void, Never>?
@@ -69,7 +72,7 @@ class PlatformServiceImpl : NSObject, PlatformService, FlutterStreamHandler {
         maxNumImages: Int64?,
         completion: @escaping (Result<Void, any Error>) -> Void
     ) {
-        DispatchQueue.global(qos: .userInitiated).async {
+        gemmaQueue.async {
             do {
                 self.model = try InferenceModel(
                     modelPath: modelPath,
@@ -102,12 +105,14 @@ class PlatformServiceImpl : NSObject, PlatformService, FlutterStreamHandler {
         enableVisionModality: Bool?,
         completion: @escaping (Result<Void, any Error>) -> Void
     ) {
-        guard let inference = model?.inference else {
-            completion(.failure(PigeonError(code: "Inference model not created", message: nil, details: nil)))
-            return
-        }
+        gemmaQueue.async {
+            guard let inference = self.model?.inference else {
+                DispatchQueue.main.async {
+                    completion(.failure(PigeonError(code: "Inference model not created", message: nil, details: nil)))
+                }
+                return
+            }
 
-        DispatchQueue.global(qos: .userInitiated).async {
             do {
                 let newSession = try InferenceSession(
                     inference: inference,
@@ -136,12 +141,14 @@ class PlatformServiceImpl : NSObject, PlatformService, FlutterStreamHandler {
     }
 
     func sizeInTokens(prompt: String, completion: @escaping (Result<Int64, any Error>) -> Void) {
-        guard let session = session else {
-            completion(.failure(PigeonError(code: "Session not created", message: nil, details: nil)))
-            return
-        }
+        gemmaQueue.async {
+            guard let session = self.session else {
+                DispatchQueue.main.async {
+                    completion(.failure(PigeonError(code: "Session not created", message: nil, details: nil)))
+                }
+                return
+            }
 
-        DispatchQueue.global(qos: .userInitiated).async {
             do {
                 let tokenCount = try session.sizeInTokens(prompt: prompt)
                 DispatchQueue.main.async { completion(.success(Int64(tokenCount))) }
@@ -152,12 +159,14 @@ class PlatformServiceImpl : NSObject, PlatformService, FlutterStreamHandler {
     }
 
     func addQueryChunk(prompt: String, completion: @escaping (Result<Void, any Error>) -> Void) {
-        guard let session = session else {
-            completion(.failure(PigeonError(code: "Session not created", message: nil, details: nil)))
-            return
-        }
+        gemmaQueue.async {
+            guard let session = self.session else {
+                DispatchQueue.main.async {
+                    completion(.failure(PigeonError(code: "Session not created", message: nil, details: nil)))
+                }
+                return
+            }
 
-        DispatchQueue.global(qos: .userInitiated).async {
             do {
                 session.waitUntilIdle()
                 try session.addQueryChunk(prompt: prompt)
@@ -170,12 +179,14 @@ class PlatformServiceImpl : NSObject, PlatformService, FlutterStreamHandler {
 
     // Add method for adding image
     func addImage(imageBytes: FlutterStandardTypedData, completion: @escaping (Result<Void, any Error>) -> Void) {
-        guard let session = session else {
-            completion(.failure(PigeonError(code: "Session not created", message: nil, details: nil)))
-            return
-        }
+        gemmaQueue.async {
+            guard let session = self.session else {
+                DispatchQueue.main.async {
+                    completion(.failure(PigeonError(code: "Session not created", message: nil, details: nil)))
+                }
+                return
+            }
 
-        DispatchQueue.global(qos: .userInitiated).async {
             do {
                 guard let uiImage = UIImage(data: imageBytes.data) else {
                     DispatchQueue.main.async {
@@ -191,6 +202,7 @@ class PlatformServiceImpl : NSObject, PlatformService, FlutterStreamHandler {
                     return
                 }
 
+                session.waitUntilIdle()
                 try session.addImage(image: cgImage)
 
                 DispatchQueue.main.async {
@@ -205,16 +217,22 @@ class PlatformServiceImpl : NSObject, PlatformService, FlutterStreamHandler {
     }
 
     func generateResponse(completion: @escaping (Result<String, any Error>) -> Void) {
-        guard let session = session else {
-            completion(.failure(PigeonError(code: "Session not created", message: nil, details: nil)))
-            return
-        }
+        gemmaQueue.async {
+            guard let session = self.session else {
+                DispatchQueue.main.async {
+                    completion(.failure(PigeonError(code: "Session not created", message: nil, details: nil)))
+                }
+                return
+            }
 
-        DispatchQueue.global(qos: .userInitiated).async {
             do {
+                session.waitUntilIdle()
+                session.markStarting()
                 let response = try session.generateResponse()
+                session.markFinished()
                 DispatchQueue.main.async { completion(.success(response)) }
             } catch {
+                self.session?.markFinished()
                 DispatchQueue.main.async { completion(.failure(error)) }
             }
         }
@@ -223,25 +241,26 @@ class PlatformServiceImpl : NSObject, PlatformService, FlutterStreamHandler {
     @available(iOS 13.0, *)
     func generateResponseAsync(completion: @escaping (Result<Void, any Error>) -> Void) {
         print("[PLUGIN LOG] generateResponseAsync called")
-        guard let session = session, let eventSink = eventSink else {
-            print("[PLUGIN LOG] Session or eventSink not created")
-            completion(.failure(PigeonError(code: "Session or eventSink not created", message: nil, details: nil)))
-            return
-        }
         
-        // Generate unique ID for this generation
         let generationId = UUID().uuidString
-        
-        print("[PLUGIN LOG] Session and eventSink available, starting generation \(generationId)")
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+
+        gemmaQueue.async { [weak self] in
             guard let self = self else { return }
+            
+            guard let session = self.session, let eventSink = self.eventSink else {
+                print("[PLUGIN LOG] Session or eventSink not created")
+                DispatchQueue.main.async {
+                    completion(.failure(PigeonError(code: "Session or eventSink not created", message: nil, details: nil)))
+                }
+                return
+            }
             
             do {
                 // Ensure engine is ready and mark it busy
                 session.waitUntilIdle()
                 session.markStarting()
                 
-                print("[PLUGIN LOG] Getting async stream from session")
+                print("[PLUGIN LOG] Getting async stream from session \(generationId)")
                 let stream = try session.generateResponseAsync()
                 print("[PLUGIN LOG] Got stream, starting Task")
                 
@@ -251,16 +270,12 @@ class PlatformServiceImpl : NSObject, PlatformService, FlutterStreamHandler {
                 }
                 
                 let task = Task.detached { [weak self] in
-                    guard let self = self else { 
-                        print("[PLUGIN LOG] Self is nil in Task")
-                        return 
-                    }
+                    guard let self = self else { return }
+                    
                     defer {
                         // ALWAYS mark finished when task exits
-                        Task { @MainActor in
-                            session.markFinished()
-                            print("[PLUGIN LOG] Generation \(generationId) marked as finished")
-                        }
+                        session.markFinished()
+                        print("[PLUGIN LOG] Generation \(generationId) marked as finished")
                     }
                     
                     do {
@@ -279,12 +294,9 @@ class PlatformServiceImpl : NSObject, PlatformService, FlutterStreamHandler {
                             }
                             
                             tokenCount += 1
-                            print("[PLUGIN LOG] Got token #\(tokenCount): '\(token)' for generation \(generationId)")
                             
                             await MainActor.run {
-                                print("[PLUGIN LOG] Sending token to Flutter via eventSink")
-                                eventSink(["partialResult": token, "done": false])
-                                print("[PLUGIN LOG] Token sent to Flutter")
+                                self.eventSink?(["partialResult": token, "done": false])
                             }
                         }
                         
@@ -294,17 +306,11 @@ class PlatformServiceImpl : NSObject, PlatformService, FlutterStreamHandler {
                         }
                         
                         if !isCancelled {
-                            print("[PLUGIN LOG] Stream finished after \(tokenCount) tokens for generation \(generationId)")
                             await MainActor.run {
-                                print("[PLUGIN LOG] Sending FlutterEndOfEventStream")
-                                eventSink(FlutterEndOfEventStream)
-                                print("[PLUGIN LOG] FlutterEndOfEventStream sent")
+                                self.eventSink?(FlutterEndOfEventStream)
                             }
-                        } else {
-                            print("[PLUGIN LOG] Stream cancelled, not sending FlutterEndOfEventStream for generation \(generationId)")
                         }
                         
-                        // Clean up this generation ID from cancelled set
                         await MainActor.run {
                             self.cancelledGenerationIds.remove(generationId)
                             if self.activeGenerationId == generationId {
@@ -315,9 +321,7 @@ class PlatformServiceImpl : NSObject, PlatformService, FlutterStreamHandler {
                     } catch {
                         print("[PLUGIN LOG] Error in stream iteration: \(error)")
                         await MainActor.run {
-                            eventSink(FlutterError(code: "ERROR", message: error.localizedDescription, details: nil))
-                            
-                            // Clean up on error
+                            self.eventSink?(FlutterError(code: "ERROR", message: error.localizedDescription, details: nil))
                             self.cancelledGenerationIds.remove(generationId)
                             if self.activeGenerationId == generationId {
                                 self.activeGenerationId = nil
@@ -327,17 +331,15 @@ class PlatformServiceImpl : NSObject, PlatformService, FlutterStreamHandler {
                     }
                 }
                 
-                // Store the task handle on main thread
                 DispatchQueue.main.sync {
                     self.activeGenerationTask = task
                 }
                 
                 DispatchQueue.main.async {
-                    print("[PLUGIN LOG] Completing with success")
                     completion(.success(()))
                 }
             } catch {
-                print("[PLUGIN LOG] Error creating stream: \(error)")
+                session.markFinished()
                 DispatchQueue.main.async {
                     completion(.failure(error))
                 }
@@ -348,40 +350,26 @@ class PlatformServiceImpl : NSObject, PlatformService, FlutterStreamHandler {
     func stopGeneration(completion: @escaping (Result<Void, any Error>) -> Void) {
         print("[PLUGIN LOG] stopGeneration called")
         
+        // 1. Signal cancellation immediately on Main queue to stop token emission
+        let generationId = self.activeGenerationId
+        if let gId = generationId {
+            self.cancelledGenerationIds.insert(gId)
+            self.activeGenerationTask?.cancel()
+            self.activeGenerationId = nil
+            self.activeGenerationTask = nil
+            print("[PLUGIN LOG] Generation \(gId) signaled to stop")
+        }
+
+        // 2. Wait for engine idle on a background queue to NOT block gemmaQueue or Main
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self = self else {
-                completion(.failure(PigeonError(code: "plugin_disposed", message: "Plugin instance is nil", details: nil)))
-                return
-            }
+            guard let self = self else { return }
             
-            // Check if there's an active generation
-            guard let generationId = self.activeGenerationId else {
-                print("[PLUGIN LOG] No active generation to stop")
-                // Still check idle just in case
-                self.session?.waitUntilIdle()
-                DispatchQueue.main.async { completion(.success(())) }
-                return
-            }
-            
-            print("[PLUGIN LOG] Stopping generation \(generationId)")
-            
-            // Mark this generation as cancelled
-            DispatchQueue.main.sync {
-                self.cancelledGenerationIds.insert(generationId)
-                
-                // Cancel the active task if it exists
-                self.activeGenerationTask?.cancel()
-                
-                // Clear active generation state
-                self.activeGenerationId = nil
-                self.activeGenerationTask = nil
-            }
-            
-            // WAIT for engine to be idle (PredictDone)
+            // Wait for engine to definitively reach Idle (PredictDone)
+            // This semaphore is signaled in session.markFinished()
             self.session?.waitUntilIdle()
             
             DispatchQueue.main.async {
-                print("[PLUGIN LOG] Generation \(generationId) stopped and engine reached idle state")
+                print("[PLUGIN LOG] Engine reached idle state after stop")
                 completion(.success(()))
             }
         }
@@ -390,14 +378,18 @@ class PlatformServiceImpl : NSObject, PlatformService, FlutterStreamHandler {
     func resetModelContext(completion: @escaping (Result<Void, any Error>) -> Void) {
         print("[PLUGIN] Resetting model context to clear KV cache")
         
-        // Close the current session (releases KV cache)
-        session = nil
-        
-        // Close and null the model to force complete unload from memory
-        model = nil
-        
-        print("[PLUGIN] Model context reset successfully")
-        completion(.success(()))
+        gemmaQueue.async {
+            // Close the current session (releases KV cache)
+            self.session = nil
+            
+            // Close and null the model to force complete unload from memory
+            self.model = nil
+            
+            DispatchQueue.main.async {
+                print("[PLUGIN] Model context reset successfully")
+                completion(.success(()))
+            }
+        }
     }
 
     // MARK: - RAG Methods (iOS Implementation)

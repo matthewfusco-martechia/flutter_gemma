@@ -67,7 +67,8 @@ class FlutterGemmaPlugin: FlutterPlugin {
 private class PlatformServiceImpl(
   val context: Context
 ) : PlatformService, EventChannel.StreamHandler {
-  private val scope = CoroutineScope(Dispatchers.IO)
+  private val gemmaDispatcher = newSingleThreadContext("GemmaEngine")
+  private val scope = CoroutineScope(gemmaDispatcher + SupervisorJob())
   private var eventSink: EventChannel.EventSink? = null
   private var inferenceModel: InferenceModel? = null
   private var session: InferenceModelSession? = null
@@ -216,10 +217,16 @@ private class PlatformServiceImpl(
   }
 
   override fun stopGeneration(callback: (Result<Unit>) -> Unit) {
+    // 1. Signal stop on the serial gemmaDispatcher
     scope.launch {
       try {
         session?.stopGeneration() ?: throw IllegalStateException("Session not created")
-        session?.waitUntilIdle()
+
+        // 2. Wait for idle on a separate thread to NOT block gemmaDispatcher
+        withContext(Dispatchers.IO) {
+          session?.waitUntilIdle()
+        }
+
         callback(Result.success(Unit))
       } catch (e: Exception) {
         callback(Result.failure(e))
